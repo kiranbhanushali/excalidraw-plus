@@ -6,7 +6,7 @@
       "headers": [
         {
           "key": "Access-Control-Allow-Origin",
-          "value": "https://excalidraw.com"
+          "value": "*"
         },
         {
           "key": "X-Content-Type-Options",
@@ -65,6 +65,13 @@
       "destination": "https://marketplace.visualstudio.com/items?itemName=pomdtr.excalidraw-editor"
     }
   ],
+  "rewrites": [
+    {
+      "source": "/dashboard",
+      "destination": "/index.html"
+    }
+  ],
   "outputDirectory": "excalidraw-app/build",
+  "buildCommand": "yarn build:app",
   "installCommand": "yarn install"
 }
