@@ -67,6 +67,10 @@
   ],
   "rewrites": [
     {
+      "source": "/api/v2/:path*",
+      "destination": "https://json.excalidraw.com/api/v2/:path*"
+    },
+    {
       "source": "/dashboard",
       "destination": "/index.html"
     }
