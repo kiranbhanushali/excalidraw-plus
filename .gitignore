@@ -29,3 +29,4 @@ meta*.json
 .claude
 .mcp.json
 mcp_excalidraw
+.env*.local
