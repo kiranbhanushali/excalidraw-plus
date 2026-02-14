@@ -1,0 +1,189 @@
+// Custom modal system matching excalidraw's visual style.
+// References: packages/excalidraw/components/Modal.scss, Dialog.scss, DialogActionButton.scss
+
+@keyframes app-modal__bg-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes app-modal__content-fade-in {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.app-modal__overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(18, 18, 18, 0.2);
+  animation: app-modal__bg-fade-in 0.1s linear;
+}
+
+.app-modal__content {
+  position: relative;
+  width: 100%;
+  max-width: 400px;
+  margin: 1rem;
+  background-color: var(--island-bg-color, #ffffff);
+  border: 1px solid var(--dialog-border-color, #ebebeb);
+  border-radius: 0.75rem;
+  box-shadow: var(
+    --modal-shadow,
+    0px 100px 80px rgba(0, 0, 0, 0.07),
+    0px 41.78px 33.42px rgba(0, 0, 0, 0.05),
+    0px 22.34px 17.87px rgba(0, 0, 0, 0.042),
+    0px 12.52px 10.02px rgba(0, 0, 0, 0.035),
+    0px 6.65px 5.32px rgba(0, 0, 0, 0.028),
+    0px 2.77px 2.21px rgba(0, 0, 0, 0.02)
+  );
+  padding: 1.5rem;
+  animation: app-modal__content-fade-in 0.15s ease-out;
+  font-family: var(
+    --ui-font,
+    Assistant,
+    system-ui,
+    -apple-system,
+    sans-serif
+  );
+  color: var(--text-primary-color, #1b1b1f);
+}
+
+.app-modal__title {
+  margin: 0 0 1rem;
+  font-size: 1.25rem;
+  font-weight: 600;
+  line-height: 1.3;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--dialog-border-color, #ebebeb);
+}
+
+.app-modal__message {
+  margin: 0 0 1.25rem;
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  color: var(--text-primary-color, #1b1b1f);
+}
+
+.app-modal__input {
+  display: block;
+  width: 100%;
+  padding: 0.625rem 0.75rem;
+  margin-bottom: 1.25rem;
+  border: 1px solid var(--default-border-color, #f1f0ff);
+  border-radius: var(--border-radius-lg, 0.5rem);
+  font-size: 0.9375rem;
+  font-family: inherit;
+  background-color: var(--input-bg-color, #ffffff);
+  color: var(--text-primary-color, #1b1b1f);
+  box-sizing: border-box;
+
+  &::placeholder {
+    color: var(--color-gray-40, #b8b8b8);
+  }
+
+  &:focus {
+    outline: none;
+    border-color: var(--color-primary, #6965db);
+    box-shadow: 0 0 0 2px rgba(105, 101, 219, 0.2);
+  }
+}
+
+.app-modal__buttons {
+  display: flex;
+  column-gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.app-modal__btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.5rem 1.5rem;
+  height: 2.75rem;
+  border: 1px solid var(--default-border-color, #f1f0ff);
+  border-radius: var(--border-radius-lg, 0.5rem);
+  font-size: 0.875rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  user-select: none;
+  letter-spacing: 0.4px;
+  transition: background-color 0.1s;
+  background-color: transparent;
+  color: var(--text-primary-color, #1b1b1f);
+
+  &:focus-visible {
+    outline: 2px solid var(--color-primary, #6965db);
+    outline-offset: 2px;
+  }
+}
+
+.app-modal__btn--primary {
+  background-color: var(--color-primary, #6965db);
+  border-color: var(--color-primary, #6965db);
+  color: #fff;
+
+  &:hover {
+    background-color: var(--color-primary-darker, #5b57d1);
+    border-color: var(--color-primary-darker, #5b57d1);
+  }
+}
+
+.app-modal__btn--danger {
+  background-color: var(--color-danger, #db6965);
+  border-color: var(--color-danger, #db6965);
+  color: #fff;
+
+  &:hover {
+    background-color: var(--color-danger-darker, #d65550);
+    border-color: var(--color-danger-darker, #d65550);
+  }
+}
+
+.app-modal__btn--cancel {
+  &:hover {
+    background-color: var(--color-surface-low, #ececf4);
+  }
+}
+
+// Dark mode
+.theme--dark {
+  .app-modal__overlay {
+    background-color: rgba(0, 0, 0, 0.4);
+  }
+
+  .app-modal__content {
+    background-color: var(--island-bg-color, #232329);
+    border-color: var(--dialog-border-color, #3d3d3d);
+    color: var(--text-primary-color, #e3e3e8);
+  }
+
+  .app-modal__title {
+    border-bottom-color: var(--dialog-border-color, #3d3d3d);
+  }
+
+  .app-modal__input {
+    background-color: var(--input-bg-color, #1e1e2e);
+    border-color: var(--default-border-color, #3d3d3d);
+    color: var(--text-primary-color, #e3e3e8);
+  }
+
+  .app-modal__btn--cancel:hover {
+    background-color: var(--color-surface-low, hsl(240, 8%, 15%));
+  }
+
+  .app-modal__btn--primary,
+  .app-modal__btn--danger {
+    color: var(--color-gray-100, #121212);
+  }
+}

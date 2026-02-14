@@ -80,6 +80,11 @@
   }
 }
 
+// Editor with tabs: ensure full height
+.excalidraw-app {
+  height: 100%;
+}
+
 .excalidraw-app.is-collaborating {
   [data-testid="clear-canvas-button"] {
     display: none;

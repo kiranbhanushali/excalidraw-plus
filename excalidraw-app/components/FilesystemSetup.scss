@@ -1,0 +1,122 @@
+.fs-setup {
+  margin-bottom: 1rem;
+  border-radius: var(--border-radius-md, 8px);
+  font-size: 0.875rem;
+  font-family: inherit;
+}
+
+.fs-setup--prompt {
+  background-color: var(--color-surface-low, #ececf4);
+  border: 1px solid var(--color-surface-lowest, #ffffff);
+  padding: 1rem 1.25rem;
+}
+
+.fs-setup--configured {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 1rem;
+  background-color: var(--color-surface-low, #ececf4);
+  border: 1px solid var(--color-surface-lowest, #ffffff);
+  gap: 1rem;
+}
+
+.fs-setup__content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.fs-setup__text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+
+  span {
+    color: var(--color-text-secondary, #666);
+    font-size: 0.8125rem;
+  }
+}
+
+.fs-setup__status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-primary-color, #1b1b1f);
+}
+
+.fs-setup__icon {
+  color: var(--color-primary, #6965db);
+  flex-shrink: 0;
+}
+
+.fs-setup__result {
+  font-size: 0.75rem;
+  color: var(--color-text-secondary, #888);
+  margin-left: 0.25rem;
+}
+
+.fs-setup__actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.fs-setup__btn {
+  border: none;
+  border-radius: var(--border-radius-md, 8px);
+  padding: 0.5rem 1rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background-color 0.15s;
+
+  &--primary {
+    background-color: var(--color-primary, #6965db);
+    color: #ffffff;
+
+    &:hover {
+      background-color: var(--color-primary-darker, #5b57d1);
+    }
+  }
+
+  &--secondary {
+    background-color: transparent;
+    color: var(--color-text-secondary, #666);
+
+    &:hover {
+      background-color: var(--color-surface-mid, #f6f6f9);
+    }
+  }
+}
+
+.fs-setup__link-btn {
+  background: none;
+  border: none;
+  color: var(--color-primary, #6965db);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-family: inherit;
+
+  &:hover {
+    background-color: var(--color-surface-mid, #f6f6f9);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+}
+
+// Dark mode
+.theme--dark .fs-setup--prompt,
+.theme--dark .fs-setup--configured {
+  background-color: var(--color-surface-low, #2a2a3a);
+  border-color: var(--color-surface-lowest, #333);
+}

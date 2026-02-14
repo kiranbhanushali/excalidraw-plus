@@ -22,9 +22,43 @@ export const AppMainMenu: React.FC<{
   theme: Theme | "system";
   setTheme: (theme: Theme | "system") => void;
   refresh: () => void;
+  onDashboard?: () => void;
+  onNewDiagram?: () => void;
+  onRenameDiagram?: () => void;
+  onDuplicateDiagram?: () => void;
+  onExportDiagram?: () => void;
+  onImportDiagram?: () => void;
+  hasDiagramContext?: boolean;
 }> = React.memo((props) => {
   return (
     <MainMenu>
+      {props.onDashboard && (
+        <MainMenu.Item onSelect={props.onDashboard}>Dashboard</MainMenu.Item>
+      )}
+      {props.onNewDiagram && (
+        <MainMenu.Item onSelect={props.onNewDiagram}>New Diagram</MainMenu.Item>
+      )}
+      {props.hasDiagramContext && props.onRenameDiagram && (
+        <MainMenu.Item onSelect={props.onRenameDiagram}>
+          Rename Diagram
+        </MainMenu.Item>
+      )}
+      {props.hasDiagramContext && props.onDuplicateDiagram && (
+        <MainMenu.Item onSelect={props.onDuplicateDiagram}>
+          Duplicate Diagram
+        </MainMenu.Item>
+      )}
+      {props.hasDiagramContext && props.onExportDiagram && (
+        <MainMenu.Item onSelect={props.onExportDiagram}>
+          Export to File
+        </MainMenu.Item>
+      )}
+      {props.onImportDiagram && (
+        <MainMenu.Item onSelect={props.onImportDiagram}>
+          Import from File
+        </MainMenu.Item>
+      )}
+      <MainMenu.Separator />
       <MainMenu.DefaultItems.LoadScene />
       <MainMenu.DefaultItems.SaveToActiveFile />
       <MainMenu.DefaultItems.Export />

@@ -83,6 +83,7 @@ import {
   Provider,
   useAtom,
   useAtomValue,
+  useSetAtom,
   useAtomWithInitialValue,
   appJotaiStore,
 } from "./app-jotai";
@@ -144,7 +145,23 @@ import "./index.scss";
 
 import { ExcalidrawPlusPromoBanner } from "./components/ExcalidrawPlusPromoBanner";
 import { AppSidebar } from "./components/AppSidebar";
+import { Dashboard } from "./components/Dashboard/Dashboard";
+import { EditorWithTabs } from "./components/EditorWithTabs";
+import {
+  viewModeAtom,
+  openTabsAtom,
+  activeTabIdAtom,
+  tabCacheAtom,
+  diagramIndexAtom,
+  filesystemEnabledAtom,
+} from "./atoms/diagramAtoms";
+import { DiagramStore } from "./data/DiagramStore";
+import { FilesystemSync } from "./data/FilesystemSync";
+import { generateThumbnail } from "./data/thumbnailGenerator";
+import { migrateLocalStorageToIDB } from "./data/migration";
+import { AppModalRenderer, appPrompt, appConfirm } from "./components/AppModal";
 
+import type { DiagramData } from "./data/DiagramStore";
 import type { CollabAPI } from "./collab/Collab";
 
 polyfill();
@@ -378,6 +395,20 @@ const ExcalidrawWrapper = () => {
 
   const editorInterface = useEditorInterface();
 
+  // --- Diagram tab state ---
+  const setViewMode = useSetAtom(viewModeAtom);
+  const [openTabs, setOpenTabs] = useAtom(openTabsAtom);
+  const [activeTabId, setActiveTabId] = useAtom(activeTabIdAtom);
+  const setTabCache = useSetAtom(tabCacheAtom);
+  const setDiagramIndex = useSetAtom(diagramIndexAtom);
+  const prevActiveTabRef = useRef<string | null>(null);
+  // Tracks which tab's content is actually loaded in the Excalidraw canvas.
+  // This prevents onChange from saving stale content to the wrong tab during switches.
+  const loadedTabRef = useRef<string | null>(null);
+  const tabCacheRef = useRef<Map<string, DiagramData>>(new Map());
+  const dirtyTabsRef = useRef(new Set<string>());
+  const initialDataResolvedRef = useRef(false);
+
   // initial state
   // ---------------------------------------------------------------------------
 
@@ -415,6 +446,226 @@ const ExcalidrawWrapper = () => {
     // TODO maybe remove this in several months (shipped: 24-03-11)
     migrationAdapter: LibraryLocalStorageMigrationAdapter,
   });
+
+  // --- Save current tab state to cache + IDB ---
+  const saveCurrentTabState = useCallback(async () => {
+    if (!excalidrawAPI || !activeTabId) {
+      return;
+    }
+    const elements = excalidrawAPI.getSceneElementsIncludingDeleted();
+    const { collaborators: _, ...appState } = excalidrawAPI.getAppState();
+    const files = excalidrawAPI.getFiles();
+    const data: DiagramData = {
+      elements: [...elements],
+      appState,
+      files: { ...files },
+    };
+
+    // Update in-memory cache (both ref and atom)
+    tabCacheRef.current.set(activeTabId, data);
+    setTabCache((prev) => {
+      const next = new Map(prev);
+      next.set(activeTabId, data);
+      return next;
+    });
+
+    // Cancel any pending debounced save to prevent it from overwriting
+    // our immediate save with stale data.
+    DiagramStore.cancelPendingSave(activeTabId);
+
+    // Save to IDB immediately — this runs at transition points (tab switches,
+    // dashboard navigation) where data must be persisted before continuing.
+    await DiagramStore.saveImmediate(activeTabId, data);
+
+    // Generate and save thumbnail for the dashboard index
+    try {
+      const thumbnail = await generateThumbnail(data.elements, data.files);
+      if (thumbnail) {
+        await DiagramStore.updateThumbnail(activeTabId, thumbnail);
+      }
+    } catch {
+      // non-critical
+    }
+  }, [excalidrawAPI, activeTabId, setTabCache]);
+
+  // --- Tab switching: load new tab data into Excalidraw ---
+  useEffect(() => {
+    if (!excalidrawAPI || !activeTabId) {
+      return;
+    }
+    if (prevActiveTabRef.current === activeTabId) {
+      return;
+    }
+    prevActiveTabRef.current = activeTabId;
+
+    // Prevent onChange from saving stale content to the new tab
+    // while we're loading it. It will be re-enabled after the scene loads.
+    loadedTabRef.current = null;
+
+    const loadTab = async () => {
+      // Try ref cache first, then atom cache (populated by Dashboard)
+      let data =
+        tabCacheRef.current.get(activeTabId) ||
+        appJotaiStore.get(tabCacheAtom).get(activeTabId);
+      if (!data) {
+        // Load from IDB
+        const diagram = await DiagramStore.get(activeTabId);
+        if (diagram) {
+          data = diagram.data;
+        }
+      }
+      if (data) {
+        tabCacheRef.current.set(activeTabId, data);
+      }
+
+      if (data) {
+        // Strip collaborators — Maps don't survive JSON round-trips.
+        const { collaborators: _, ...cleanAppState } = data.appState as any;
+        const restoredElements = restoreElements(data.elements, null, {
+          repairBindings: true,
+        });
+        const restoredAppState = restoreAppState(cleanAppState, null);
+
+        if (!initialDataResolvedRef.current) {
+          // First load: resolve the initialData promise with actual data so
+          // Excalidraw's internal initializeScene processes it correctly
+          // (resolving with null would cause a blank canvas reset).
+          initialDataResolvedRef.current = true;
+          initialStatePromiseRef.current.promise.resolve({
+            elements: restoredElements,
+            appState: restoredAppState,
+          });
+        } else {
+          // Subsequent tab switches: update the scene directly
+          excalidrawAPI.updateScene({
+            elements: restoredElements,
+            appState: restoredAppState,
+            captureUpdate: CaptureUpdateAction.NEVER,
+          });
+          excalidrawAPI.history.clear();
+          excalidrawAPI.scrollToContent();
+        }
+
+        // Load files
+        const fileValues = Object.values(data.files);
+        if (fileValues.length) {
+          excalidrawAPI.addFiles(fileValues);
+        }
+      } else {
+        // New empty diagram
+        if (!initialDataResolvedRef.current) {
+          initialDataResolvedRef.current = true;
+          initialStatePromiseRef.current.promise.resolve(null);
+        } else {
+          excalidrawAPI.resetScene();
+        }
+      }
+
+      // Now that the scene is loaded, enable onChange for this tab
+      loadedTabRef.current = activeTabId;
+    };
+
+    loadTab();
+  }, [excalidrawAPI, activeTabId]);
+
+  // --- Keyboard shortcuts for tabs ---
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isMod = e.metaKey || e.ctrlKey;
+      if (!isMod) {
+        return;
+      }
+
+      if (e.key === "s" && !e.shiftKey) {
+        e.preventDefault();
+        if (activeTabId) {
+          saveCurrentTabState();
+        }
+      } else if (e.key === "t" && !e.shiftKey) {
+        e.preventDefault();
+        // Create new diagram
+        (async () => {
+          const name = await appPrompt({
+            title: "New Diagram",
+            placeholder: "Untitled",
+          });
+          if (name === null) {
+            return;
+          }
+          await saveCurrentTabState();
+          const diagram = await DiagramStore.create(name.trim() || undefined);
+          const updatedIndex = await DiagramStore.getIndex();
+          setDiagramIndex(updatedIndex);
+          setTabCache((prev) => {
+            const next = new Map(prev);
+            next.set(diagram.id, diagram.data);
+            return next;
+          });
+          setOpenTabs((prev) => [
+            ...prev,
+            { id: diagram.id, name: diagram.name, isDirty: false },
+          ]);
+          setActiveTabId(diagram.id);
+          setViewMode("editor");
+        })();
+      } else if (e.key === "w" && !e.shiftKey) {
+        e.preventDefault();
+        if (activeTabId && openTabs.length > 0) {
+          (async () => {
+            await saveCurrentTabState();
+            const tabIndex = openTabs.findIndex((t) => t.id === activeTabId);
+            const newTabs = openTabs.filter((t) => t.id !== activeTabId);
+            setOpenTabs(newTabs);
+            setTabCache((prev) => {
+              const next = new Map(prev);
+              next.delete(activeTabId);
+              return next;
+            });
+            if (newTabs.length > 0) {
+              const nextIndex = Math.min(tabIndex, newTabs.length - 1);
+              setActiveTabId(newTabs[nextIndex].id);
+            } else {
+              setActiveTabId(null);
+              setViewMode("dashboard");
+            }
+          })();
+        }
+      } else if (e.key === "Tab") {
+        e.preventDefault();
+        if (openTabs.length > 1 && activeTabId) {
+          const currentIndex = openTabs.findIndex((t) => t.id === activeTabId);
+          const nextIndex = e.shiftKey
+            ? (currentIndex - 1 + openTabs.length) % openTabs.length
+            : (currentIndex + 1) % openTabs.length;
+          (async () => {
+            await saveCurrentTabState();
+            setActiveTabId(openTabs[nextIndex].id);
+          })();
+        }
+      } else if (e.key >= "1" && e.key <= "9") {
+        e.preventDefault();
+        const index = parseInt(e.key, 10) - 1;
+        if (index < openTabs.length) {
+          (async () => {
+            await saveCurrentTabState();
+            setActiveTabId(openTabs[index].id);
+          })();
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [
+    activeTabId,
+    openTabs,
+    saveCurrentTabState,
+    setActiveTabId,
+    setDiagramIndex,
+    setOpenTabs,
+    setTabCache,
+    setViewMode,
+  ]);
 
   const [, forceRefresh] = useState(false);
 
@@ -505,13 +756,20 @@ const ExcalidrawWrapper = () => {
       }
     };
 
-    initializeScene({ collabAPI, excalidrawAPI }).then(async (data) => {
-      loadImages(data, /* isInitialLoad */ true);
-      initialStatePromiseRef.current.promise.resolve(data.scene);
-    });
+    // Skip initializeScene when tabs are active (initialData already resolved).
+    if (!activeTabId) {
+      initializeScene({ collabAPI, excalidrawAPI }).then(async (data) => {
+        loadImages(data, /* isInitialLoad */ true);
+        initialStatePromiseRef.current.promise.resolve(data.scene);
+      });
+    }
 
     const onHashChange = async (event: HashChangeEvent) => {
       event.preventDefault();
+      // Skip hash-based scene reloading when tab content is managed by IndexedDB.
+      if (loadedTabRef.current) {
+        return;
+      }
       const libraryUrlTokens = parseLibraryTokensFromUrl();
       if (!libraryUrlTokens) {
         if (
@@ -539,6 +797,10 @@ const ExcalidrawWrapper = () => {
 
     const syncData = debounce(() => {
       if (isTestEnv()) {
+        return;
+      }
+      // Skip localStorage sync when tab content is managed by IndexedDB.
+      if (loadedTabRef.current) {
         return;
       }
       if (
@@ -598,6 +860,10 @@ const ExcalidrawWrapper = () => {
 
     const onUnload = () => {
       LocalData.flushSave();
+      // Use the ref to get the latest activeTabId
+      if (prevActiveTabRef.current) {
+        DiagramStore.flushSave(prevActiveTabRef.current);
+      }
     };
 
     const visibilityChange = (event: FocusEvent | Event) => {
@@ -633,6 +899,9 @@ const ExcalidrawWrapper = () => {
   useEffect(() => {
     const unloadHandler = (event: BeforeUnloadEvent) => {
       LocalData.flushSave();
+      if (prevActiveTabRef.current) {
+        DiagramStore.flushSave(prevActiveTabRef.current);
+      }
 
       if (
         excalidrawAPI &&
@@ -664,9 +933,37 @@ const ExcalidrawWrapper = () => {
       collabAPI.syncElements(elements);
     }
 
-    // this check is redundant, but since this is a hot path, it's best
-    // not to evaludate the nested expression every time
-    if (!LocalData.isSavePaused()) {
+    // Save to DiagramStore if a diagram tab is active.
+    // Use loadedTabRef (not activeTabId) to avoid saving stale content
+    // to the wrong tab during tab switches.
+    const currentLoadedTab = loadedTabRef.current;
+    if (currentLoadedTab) {
+      // Strip collaborators before storing — Maps don't survive JSON
+      // round-trips (become plain objects) and collaborators are transient.
+      const { collaborators: _, ...storedAppState } = appState;
+      const data: DiagramData = {
+        elements: [...elements],
+        appState: storedAppState,
+        files: { ...files },
+      };
+      // Update ref directly — no state update to avoid re-render loops
+      tabCacheRef.current.set(currentLoadedTab, data);
+      // Save to IDB (debounced)
+      DiagramStore.save(currentLoadedTab, data);
+
+      // Mark tab as dirty (only once to avoid re-render loops)
+      if (!dirtyTabsRef.current.has(currentLoadedTab)) {
+        dirtyTabsRef.current.add(currentLoadedTab);
+        setOpenTabs((prev) =>
+          prev.map((t) =>
+            t.id === currentLoadedTab ? { ...t, isDirty: true } : t,
+          ),
+        );
+      }
+    }
+
+    // Save to localStorage for backward compat / collab (only when tab is loaded).
+    if (currentLoadedTab && !LocalData.isSavePaused()) {
       LocalData.save(elements, appState, files, () => {
         if (excalidrawAPI) {
           let didChange = false;
@@ -831,7 +1128,7 @@ const ExcalidrawWrapper = () => {
     },
   };
 
-  return (
+  const editorContent = (
     <div
       style={{ height: "100%" }}
       className={clsx("excalidraw-app", {
@@ -882,6 +1179,7 @@ const ExcalidrawWrapper = () => {
         handleKeyboardGlobally={true}
         autoFocus={true}
         theme={editorTheme}
+        name={openTabs.find((t) => t.id === activeTabId)?.name}
         renderTopRightUI={(isMobile) => {
           if (isMobile || !collabAPI || isCollabDisabled) {
             return null;
@@ -920,6 +1218,120 @@ const ExcalidrawWrapper = () => {
           theme={appTheme}
           setTheme={(theme) => setAppTheme(theme)}
           refresh={() => forceRefresh((prev) => !prev)}
+          hasDiagramContext={!!activeTabId}
+          onDashboard={async () => {
+            await saveCurrentTabState();
+            setViewMode("dashboard");
+          }}
+          onNewDiagram={async () => {
+            const name = await appPrompt({
+              title: "New Diagram",
+              placeholder: "Untitled",
+            });
+            if (name === null) {
+              return;
+            }
+            await saveCurrentTabState();
+            const diagramName = name.trim() || undefined;
+            const diagram = await DiagramStore.create(diagramName);
+            const updatedIndex = await DiagramStore.getIndex();
+            setDiagramIndex(updatedIndex);
+            setTabCache((prev) => {
+              const next = new Map(prev);
+              next.set(diagram.id, diagram.data);
+              return next;
+            });
+            setOpenTabs((prev) => [
+              ...prev,
+              { id: diagram.id, name: diagram.name, isDirty: false },
+            ]);
+            setActiveTabId(diagram.id);
+            setViewMode("editor");
+          }}
+          onRenameDiagram={
+            activeTabId
+              ? async () => {
+                  const tab = openTabs.find((t) => t.id === activeTabId);
+                  if (!tab) {
+                    return;
+                  }
+                  const newName = await appPrompt({
+                    title: "Rename Diagram",
+                    defaultValue: tab.name,
+                  });
+                  if (newName?.trim()) {
+                    await DiagramStore.rename(activeTabId, newName.trim());
+                    setOpenTabs((prev) =>
+                      prev.map((t) =>
+                        t.id === activeTabId
+                          ? { ...t, name: newName.trim() }
+                          : t,
+                      ),
+                    );
+                    const updatedIndex = await DiagramStore.getIndex();
+                    setDiagramIndex(updatedIndex);
+                  }
+                }
+              : undefined
+          }
+          onDuplicateDiagram={
+            activeTabId
+              ? async () => {
+                  await saveCurrentTabState();
+                  const dup = await DiagramStore.duplicate(activeTabId);
+                  const updatedIndex = await DiagramStore.getIndex();
+                  setDiagramIndex(updatedIndex);
+                  setTabCache((prev) => {
+                    const next = new Map(prev);
+                    next.set(dup.id, dup.data);
+                    return next;
+                  });
+                  setOpenTabs((prev) => [
+                    ...prev,
+                    { id: dup.id, name: dup.name, isDirty: false },
+                  ]);
+                  setActiveTabId(dup.id);
+                }
+              : undefined
+          }
+          onExportDiagram={
+            activeTabId
+              ? async () => {
+                  await saveCurrentTabState();
+                  await DiagramStore.exportToFile(activeTabId);
+                }
+              : undefined
+          }
+          onImportDiagram={async () => {
+            const input = document.createElement("input");
+            input.type = "file";
+            input.accept = ".excalidraw,.json";
+            input.onchange = async (e) => {
+              const file = (e.target as HTMLInputElement).files?.[0];
+              if (!file) {
+                return;
+              }
+              try {
+                const diagram = await DiagramStore.importFromFile(file);
+                const updatedIndex = await DiagramStore.getIndex();
+                setDiagramIndex(updatedIndex);
+                setTabCache((prev) => {
+                  const next = new Map(prev);
+                  next.set(diagram.id, diagram.data);
+                  return next;
+                });
+                setOpenTabs((prev) => [
+                  ...prev,
+                  { id: diagram.id, name: diagram.name, isDirty: false },
+                ]);
+                setActiveTabId(diagram.id);
+                setViewMode("editor");
+              } catch (err) {
+                console.error("Failed to import file:", err);
+              }
+            };
+            input.click();
+          }}
         />
         <AppWelcomeScreen
           onCollabDialogOpen={onCollabDialogOpen}
@@ -997,6 +1409,135 @@ const ExcalidrawWrapper = () => {
 
         <CommandPalette
           customCommandPaletteItems={[
+            {
+              label: "Go to Dashboard",
+              category: DEFAULT_CATEGORIES.app,
+              predicate: true,
+              keywords: ["home", "dashboard", "diagrams", "list"],
+              perform: async () => {
+                await saveCurrentTabState();
+                setViewMode("dashboard");
+              },
+            },
+            {
+              label: "New Diagram",
+              category: DEFAULT_CATEGORIES.app,
+              predicate: true,
+              keywords: ["create", "new", "diagram", "tab"],
+              perform: async () => {
+                const name = await appPrompt({
+                  title: "New Diagram",
+                  placeholder: "Untitled",
+                });
+                if (name === null) {
+                  return;
+                }
+                await saveCurrentTabState();
+                const diagramName = name.trim() || undefined;
+                const diagram = await DiagramStore.create(diagramName);
+                const updatedIndex = await DiagramStore.getIndex();
+                setDiagramIndex(updatedIndex);
+                setTabCache((prev) => {
+                  const next = new Map(prev);
+                  next.set(diagram.id, diagram.data);
+                  return next;
+                });
+                setOpenTabs((prev) => [
+                  ...prev,
+                  { id: diagram.id, name: diagram.name, isDirty: false },
+                ]);
+                setActiveTabId(diagram.id);
+                setViewMode("editor");
+              },
+            },
+            {
+              label: "Close Tab",
+              category: DEFAULT_CATEGORIES.app,
+              predicate: () => openTabs.length > 0,
+              keywords: ["close", "tab", "remove"],
+              perform: async () => {
+                if (!activeTabId) {
+                  return;
+                }
+                await saveCurrentTabState();
+                const tabIndex = openTabs.findIndex(
+                  (t) => t.id === activeTabId,
+                );
+                const newTabs = openTabs.filter((t) => t.id !== activeTabId);
+                setOpenTabs(newTabs);
+                setTabCache((prev) => {
+                  const next = new Map(prev);
+                  next.delete(activeTabId);
+                  return next;
+                });
+                if (newTabs.length > 0) {
+                  const nextIndex = Math.min(tabIndex, newTabs.length - 1);
+                  setActiveTabId(newTabs[nextIndex].id);
+                } else {
+                  setActiveTabId(null);
+                  setViewMode("dashboard");
+                }
+              },
+            },
+            {
+              label: "Close Other Tabs",
+              category: DEFAULT_CATEGORIES.app,
+              predicate: () => openTabs.length > 1,
+              keywords: ["close", "other", "tabs"],
+              perform: async () => {
+                if (!activeTabId) {
+                  return;
+                }
+                await saveCurrentTabState();
+                const currentTab = openTabs.find((t) => t.id === activeTabId);
+                if (currentTab) {
+                  setOpenTabs([currentTab]);
+                  setTabCache((prev) => {
+                    const next = new Map();
+                    const data = prev.get(activeTabId);
+                    if (data) {
+                      next.set(activeTabId, data);
+                    }
+                    return next;
+                  });
+                }
+              },
+            },
+            {
+              label: "Switch to Next Tab",
+              category: DEFAULT_CATEGORIES.app,
+              predicate: () => openTabs.length > 1,
+              keywords: ["next", "tab", "switch"],
+              perform: async () => {
+                if (!activeTabId || openTabs.length <= 1) {
+                  return;
+                }
+                await saveCurrentTabState();
+                const currentIndex = openTabs.findIndex(
+                  (t) => t.id === activeTabId,
+                );
+                const nextIndex = (currentIndex + 1) % openTabs.length;
+                setActiveTabId(openTabs[nextIndex].id);
+              },
+            },
+            {
+              label: "Switch to Previous Tab",
+              category: DEFAULT_CATEGORIES.app,
+              predicate: () => openTabs.length > 1,
+              keywords: ["previous", "tab", "switch"],
+              perform: async () => {
+                if (!activeTabId || openTabs.length <= 1) {
+                  return;
+                }
+                await saveCurrentTabState();
+                const currentIndex = openTabs.findIndex(
+                  (t) => t.id === activeTabId,
+                );
+                const prevIndex =
+                  (currentIndex - 1 + openTabs.length) % openTabs.length;
+                setActiveTabId(openTabs[prevIndex].id);
+              },
+            },
             {
               label: t("labels.liveCollaboration"),
               category: DEFAULT_CATEGORIES.app,
@@ -1194,6 +1735,123 @@ const ExcalidrawWrapper = () => {
       </Excalidraw>
     </div>
   );
+
+  // Wrap with tabs if we have open tabs
+  if (openTabs.length > 0) {
+    return (
+      <EditorWithTabs
+        excalidrawAPI={excalidrawAPI}
+        onSaveCurrentTab={saveCurrentTabState}
+      >
+        {editorContent}
+      </EditorWithTabs>
+    );
+  }
+
+  return editorContent;
+};
+
+const AppContent = () => {
+  const viewMode = useAtomValue(viewModeAtom);
+  const openTabs = useAtomValue(openTabsAtom);
+  const isCollaborating = useAtomValue(isCollaboratingAtom);
+  const setViewMode = useSetAtom(viewModeAtom);
+  const setOpenTabs = useSetAtom(openTabsAtom);
+  const setActiveTabId = useSetAtom(activeTabIdAtom);
+  const setTabCache = useSetAtom(tabCacheAtom);
+  const setDiagramIndex = useSetAtom(diagramIndexAtom);
+  const setFilesystemEnabled = useSetAtom(filesystemEnabledAtom);
+
+  const isInitialRender = useRef(true);
+
+  // URL → viewMode: resolve initial route on mount
+  useEffect(() => {
+    const path = window.location.pathname;
+    if (path === "/dashboard") {
+      setViewMode("dashboard");
+    } else if (path === "/" || path === "") {
+      // If persisted tabs exist, show editor; otherwise dashboard
+      if (openTabs.length === 0) {
+        setViewMode("dashboard");
+      } else {
+        setViewMode("editor");
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // viewMode → URL: sync URL when view changes
+  useEffect(() => {
+    const targetPath = viewMode === "dashboard" ? "/dashboard" : "/";
+    if (window.location.pathname !== targetPath) {
+      if (isInitialRender.current) {
+        window.history.replaceState({ viewMode }, "", targetPath);
+      } else {
+        window.history.pushState({ viewMode }, "", targetPath);
+      }
+    }
+    isInitialRender.current = false;
+  }, [viewMode]);
+
+  // popstate: handle browser back/forward
+  useEffect(() => {
+    const handlePopState = () => {
+      const path = window.location.pathname;
+      if (path === "/dashboard") {
+        setViewMode("dashboard");
+      } else {
+        setViewMode("editor");
+      }
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [setViewMode]);
+
+  // Migration + filesystem init: run on first mount
+  useEffect(() => {
+    const runInit = async () => {
+      const migratedId = await migrateLocalStorageToIDB();
+      if (migratedId) {
+        const diagram = await DiagramStore.get(migratedId);
+        if (diagram) {
+          setTabCache((prev) => {
+            const next = new Map(prev);
+            next.set(migratedId, diagram.data);
+            return next;
+          });
+          setOpenTabs([{ id: migratedId, name: diagram.name, isDirty: false }]);
+          setActiveTabId(migratedId);
+          setViewMode("editor");
+        }
+      }
+      const index = await DiagramStore.getIndex();
+      setDiagramIndex(index);
+
+      // Check if filesystem sync is configured
+      const fsEnabled = await FilesystemSync.isEnabled();
+      setFilesystemEnabled(fsEnabled);
+    };
+    runInit();
+  }, [
+    setTabCache,
+    setOpenTabs,
+    setActiveTabId,
+    setViewMode,
+    setDiagramIndex,
+    setFilesystemEnabled,
+  ]);
+
+  // Show dashboard when in dashboard mode and not collaborating
+  const isCollabLink = isCollaborationLink(window.location.href);
+  if (viewMode === "dashboard" && !isCollaborating && !isCollabLink) {
+    return (
+      <div style={{ height: "100%" }} className="excalidraw-app">
+        <Dashboard />
+      </div>
+    );
+  }
+
+  return <ExcalidrawWrapper />;
 };
 
 const ExcalidrawApp = () => {
@@ -1206,7 +1864,8 @@ const ExcalidrawApp = () => {
   return (
     <TopErrorBoundary>
       <Provider store={appJotaiStore}>
-        <ExcalidrawWrapper />
+        <AppContent />
+        <AppModalRenderer />
       </Provider>
     </TopErrorBoundary>
   );

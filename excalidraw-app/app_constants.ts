@@ -7,6 +7,9 @@ export const SYNC_FULL_SCENE_INTERVAL_MS = 20000;
 export const SYNC_BROWSER_TABS_TIMEOUT = 50;
 export const CURSOR_SYNC_TIMEOUT = 33; // ~30fps
 export const DELETED_ELEMENT_TIMEOUT = 24 * 60 * 60 * 1000; // 1 day
+export const DIAGRAM_SAVE_DEBOUNCE_TIMEOUT = 500;
+export const THUMBNAIL_DEBOUNCE_TIMEOUT = 5000;
+export const FILESYSTEM_SYNC_DEBOUNCE_TIMEOUT = 1000;
 
 // should be aligned with MAX_ALLOWED_FILE_BYTES
 export const FILE_UPLOAD_MAX_BYTES = 4 * 1024 * 1024; // 4 MiB
